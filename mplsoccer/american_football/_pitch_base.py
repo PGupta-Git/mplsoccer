@@ -3,6 +3,9 @@
 import warnings
 from abc import abstractmethod
 from matplotlib import rcParams
+from matplotlib.path import Path
+from matplotlib import patches
+import numpy as np
 
 from .dimensions import create_pitch_dims, valid, size_varies
 from .._pitch_base import BasePitch
@@ -20,8 +23,13 @@ class BasePitchAmericanFootball(BasePitch):
         Whether to display half of the pitch.
     pitch_color : any Matplotlib color, default None
         The background color for each Matplotlib axis.
-         If None, defaults to rcParams["axes.facecolor"].
+        If None, defaults to rcParams["axes.facecolor"].
         To remove the background set to "None" or 'None'.
+    boundary_color : any Matplotlib color, default 'white'
+        The background color for each Matplotlib axis.
+        To remove the background set to "None" or 'None'.
+    boundary_alpha : float, default 1
+        The transparency of the pitch boundary.
     line_color : any Matplotlib color, default None
         The line color for the pitch markings. If None, defaults to rcParams["grid.color"].
     line_alpha : float, default 1
@@ -66,7 +74,8 @@ class BasePitchAmericanFootball(BasePitch):
         Whether to include the axis ticks.
     """
     def __init__(self, pitch_type='statsbomb', half=False,
-                 pitch_color=None, line_color=None, line_alpha=1, linewidth=2,
+                 pitch_color=None, boundary_color='white', boundary_alpha=1,
+                 line_color=None, line_alpha=1, linewidth=2,
                  linestyle=None, line_zorder=0.9,
                  pad_left=None, pad_right=None, pad_bottom=None, pad_top=None,
                  pitch_length=None, pitch_width=None,
@@ -86,6 +95,8 @@ class BasePitchAmericanFootball(BasePitch):
                          axis=axis, label=label, tick=tick,
                          )
         self.goal_color = goal_color
+        self.boundary_color = boundary_color
+        self.boundary_alpha = boundary_alpha
         self.goal_alpha = goal_alpha
         self.goal_linestyle = goal_linestyle
         self.goal_linewidth = goal_linewidth
@@ -101,6 +112,7 @@ class BasePitchAmericanFootball(BasePitch):
         return (f'{self.__class__.__name__}('
                 f'pitch_type={self.pitch_type!r}, half={self.half!r}, '
                 f'pitch_color={self.pitch_color!r}, line_color={self.line_color!r}, '
+                f'boundary_color_={self.boundary_color!r}, boundary_alpha={self.boundary_alpha!r}, '
                 f'line_alpha_={self.line_alpha!r}, '
                 f'linewidth={self.linewidth!r}, line_zorder={self.line_zorder!r}, '
                 f'linestyle={self.linestyle!r}, '
@@ -147,6 +159,37 @@ class BasePitchAmericanFootball(BasePitch):
         ax.set_facecolor(self.pitch_color)
 
     def _draw_pitch_markings(self, ax):
+
+        # boundary
+        vertices = np.array([
+            [self.dim.boundary_left, self.dim.boundary_top],
+            [self.dim.boundary_left, self.dim.boundary_bottom],
+            [self.dim.boundary_right, self.dim.boundary_bottom],
+            [self.dim.boundary_right, self.dim.boundary_top],
+            [self.dim.boundary_left, self.dim.boundary_top],
+            [self.dim.left, self.dim.top],
+            [self.dim.right, self.dim.top],
+            [self.dim.right, self.dim.bottom],
+            [self.dim.left, self.dim.bottom],
+            [self.dim.left, self.dim.top],
+        ])
+        codes = [Path.MOVETO,
+                 Path.LINETO,
+                 Path.LINETO,
+                 Path.LINETO,
+                 Path.CLOSEPOLY,
+                 Path.MOVETO,
+                 Path.LINETO,
+                 Path.LINETO,
+                 Path.LINETO,
+                 Path.CLOSEPOLY,
+                ]
+        boundary_prop = {'facecolor': self.boundary_color,
+                         'edgecolor': 'None',
+                         'alpha': self.boundary_alpha,
+                        }
+        self._draw_patch_path(ax, vertices, codes, **boundary_prop)
+
         # if we use rectangles here then the linestyle isn't consistent around the pitch
         # as sometimes the rectangles overlap with each other and the gaps between
         # lines can when they overlap can look like a solid line even with -. linestyles.
@@ -154,14 +197,41 @@ class BasePitchAmericanFootball(BasePitch):
                      'color': self.line_color, 'zorder': self.line_zorder,
                      'linestyle': self.linestyle,
                      }
-        # main markings (outside of pitch and center line)
-        xs_main = [self.dim.center_length, self.dim.center_length, self.dim.right,
-                   self.dim.right, self.dim.left, self.dim.left, self.dim.center_length,
+        # main markings side lines and end lines
+        xs_main = [self.dim.right, self.dim.right,
+                   self.dim.left, self.dim.left,
+                   self.dim.right,
                    ]
-        ys_main = [self.dim.bottom, self.dim.top, self.dim.top,
-                   self.dim.bottom, self.dim.bottom, self.dim.top, self.dim.top,
+        ys_main = [self.dim.top, self.dim.bottom,
+                   self.dim.bottom, self.dim.top,
+                   self.dim.top,
                    ]
-        self._draw_line(ax, xs_main, ys_main, **line_prop)
+        self._draw_line(ax, xs_main, ys_main,
+                        **line_prop)
+
+        # goal lines
+        ys = [self.dim.bottom,  self.dim.top]
+        self._draw_line(ax,
+                        [self.dim.goal_line_left,
+                         self.dim.goal_line_left],
+                        ys,
+                        **line_prop)
+        self._draw_line(ax,
+                        [self.dim.goal_line_right,
+                         self.dim.goal_line_right],
+                        ys,
+                        **line_prop)
+        for x in self.dim.yard_lines_major:
+            self._draw_line(ax, [x, x], ys, **line_prop)
+        for x in self.dim.yard_lines_minor:
+            self._draw_line(ax, [x, x],
+                            [self.dim.hash_mark_top_start,
+                             self.dim.hash_mark_top_end],
+                            **line_prop)
+            self._draw_line(ax, [x, x],
+                            [self.dim.hash_mark_bottom_start,
+                             self.dim.hash_mark_bottom_end],
+                            **line_prop)
 
     def _draw_goals(self, ax):
         line_prop = {'linewidth': self.goal_linewidth,
@@ -173,6 +243,11 @@ class BasePitchAmericanFootball(BasePitch):
                             [self.dim.goal_top, self.dim.goal_bottom], **line_prop)
         self._draw_line(ax, [self.dim.left, self.dim.left],
                             [self.dim.goal_top, self.dim.goal_bottom], **line_prop)
+
+    def _draw_patch_path(self, ax, vertices, codes, **kwargs):
+        vertices = self._reverse_vertices_if_vertical(vertices)
+        patch_path = patches.PathPatch(Path(vertices, codes), **kwargs)
+        ax.add_patch(patch_path)
 
     # The methods below for drawing/ setting attributes for some pitch elements
     # are defined in pitch.py as they differ for horizontal/ vertical pitches

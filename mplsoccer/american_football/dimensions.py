@@ -15,6 +15,10 @@ size_varies = []
 @dataclass
 class BaseAmericanFootballDims(BaseDims):
     """ Base dataclass to hold American Football dimensions."""
+    boundary_left: float
+    boundary_right: float
+    boundary_bottom: float
+    boundary_top: float
     goal_line_left: float
     goal_line_right: float
     yard_line_minor_size: float
@@ -23,8 +27,10 @@ class BaseAmericanFootballDims(BaseDims):
     conversion_left: float
     conversion_right: float
     conversion_size: float
-    hash_mark_bottom: float
-    hash_mark_top: float
+    hash_mark_bottom_start: float
+    hash_mark_bottom_end: float
+    hash_mark_top_start: float
+    hash_mark_top_end: float
     hash_mark_size: float
     goal_bottom: float
     goal_top: float
@@ -47,6 +53,10 @@ class BaseAmericanFootballDims(BaseDims):
 def statsbomb_dims():
     """ Create 'statsbomb dimensions."""
     return BaseAmericanFootballDims(left=-10, right=110, bottom=53.33, top=0,
+                                    boundary_left=-12,
+                                    boundary_right=112,
+                                    boundary_bottom=55.33,
+                                    boundary_top=-2,
                                     pitch_width=53.33, pitch_length=120,
                                     width=53.33, length=120,
                                     invert_y=True, origin_center=False,
@@ -57,7 +67,10 @@ def statsbomb_dims():
                                     goal_bottom=26.67+18.5/3,
                                     goal_top=26.67-18.5/3,
                                     yard_number_top=10, yard_number_bottom=43.33,
-                                    hash_mark_bottom=53.33-70.75/3, hash_mark_top=70.75/3,
+                                    hash_mark_bottom_start=53.33-8/36,
+                                    hash_mark_bottom_end=53.33-32/36,
+                                    hash_mark_top_start=8/36,
+                                    hash_mark_top_end=32/36,
                                     yard_line_minor_size=2/3, hash_mark_size=2/3,
                                     conversion_left=2, conversion_right=98, conversion_size=3,
                                    )
