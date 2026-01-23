@@ -162,13 +162,13 @@ class CurvedText(Artist):
 
         prop = self._template.get_fontproperties()
 
-        widths = [0.0]
-        for i in range(1, len(line.text) + 1):
-            w, _, _ = renderer.get_text_width_height_descent(
-                line.text[:i], prop, ismath=False
-            )
-            widths.append(float(w))
-        advances_px = [widths[i + 1] - widths[i] for i in range(len(line.text))]
+        # Use individual character widths instead of cumulative text widths.
+        # Cumulative widths include kerning adjustments that don't apply when
+        # each character is rendered individually, causing spacing mismatches.
+        advances_px = []
+        for ch in line.text:
+            w, _, _ = renderer.get_text_width_height_descent(ch, prop, ismath=False)
+            advances_px.append(float(w))
 
         letter_spacing_px = self._letter_spacing_points * self.figure.dpi / 72.0
         total_width_px = float(sum(advances_px))
