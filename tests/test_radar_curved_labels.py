@@ -17,6 +17,13 @@ def test_radar_curved_param_labels_smoke():
 
     assert len(labels) == len(params)
     assert all(isinstance(label, CurvedText) for label in labels)
+
+    # Regression: vector glyph artists expose stable positions/rotations.
+    glyphs = labels[0].get_children()
+    assert glyphs
+    assert all(hasattr(g, "_mplsoccer_char") for g in glyphs)
+    assert all(hasattr(g, "_mplsoccer_position") for g in glyphs)
+    assert all(hasattr(g, "_mplsoccer_rotation") for g in glyphs)
     plt.close(fig)
 
 
@@ -32,11 +39,13 @@ def test_radar_curved_param_labels_bottom_reads_left_to_right():
     children = bottom.get_children()
     assert children  # should draw at least one glyph
 
-    xs = [child.get_position()[0] for child in children]
+    xs = [child._mplsoccer_position[0] for child in children]
     assert xs[0] < xs[-1]  # reading direction is left-to-right
 
-    rotations = [child.get_rotation() for child in children]
-    rotations = [((rot + 180) % 360) - 180 for rot in rotations]  # normalize to [-180, 180)
+    rotations = [child._mplsoccer_rotation for child in children]
+    rotations = [
+        ((rot + 180) % 360) - 180 for rot in rotations
+    ]  # normalize to [-180, 180)
     assert all(-90 <= rot <= 90 for rot in rotations)  # not upside-down
     plt.close(fig)
 
@@ -52,14 +61,14 @@ def test_radar_curved_param_labels_multiline_uses_multiple_radii():
     label0 = labels[0]
     children = label0.get_children()
     radii_a = [
-        float(np.hypot(*child.get_position()))
+        float(np.hypot(*child._mplsoccer_position))
         for child in children
-        if child.get_text() == "A"
+        if child._mplsoccer_char == "A"
     ]
     radii_b = [
-        float(np.hypot(*child.get_position()))
+        float(np.hypot(*child._mplsoccer_position))
         for child in children
-        if child.get_text() == "B"
+        if child._mplsoccer_char == "B"
     ]
     assert radii_a
     assert radii_b
@@ -79,14 +88,14 @@ def test_radar_curved_param_labels_multiline_order_bottom_half():
     bottom_label = labels[2]
     children = bottom_label.get_children()
     radii_a = [
-        float(np.hypot(*child.get_position()))
+        float(np.hypot(*child._mplsoccer_position))
         for child in children
-        if child.get_text() == "A"
+        if child._mplsoccer_char == "A"
     ]
     radii_b = [
-        float(np.hypot(*child.get_position()))
+        float(np.hypot(*child._mplsoccer_position))
         for child in children
-        if child.get_text() == "B"
+        if child._mplsoccer_char == "B"
     ]
     assert radii_a
     assert radii_b

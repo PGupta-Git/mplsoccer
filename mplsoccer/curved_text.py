@@ -10,12 +10,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Literal
+import warnings
 
 import numpy as np
 from matplotlib.artist import Artist
+from matplotlib.patches import PathPatch
 from matplotlib.text import Text
+from matplotlib.textpath import TextPath, text_to_path
+from matplotlib.transforms import Affine2D
 
 __all__ = ["CurvedText"]
+
+
+_WARNED_UNSUPPORTED_BBOX = False
 
 
 _Align = Literal["center", "start", "end"]
@@ -27,7 +34,7 @@ _RadiiMode = Literal["outward", "center"]
 class _LineGlyphs:
     text: str
     chars: list[str]
-    artists: list[Text | None]  # None for whitespace characters
+    artists: list[PathPatch | None]  # None for whitespace characters
 
 
 class CurvedText(Artist):
@@ -58,6 +65,20 @@ class CurvedText(Artist):
         **text_kwargs,
     ):
         super().__init__()
+
+        # Text kwargs that do not translate cleanly to per-glyph PathPatches.
+        global _WARNED_UNSUPPORTED_BBOX
+        if (
+            "bbox" in text_kwargs or "backgroundcolor" in text_kwargs
+        ) and not _WARNED_UNSUPPORTED_BBOX:
+            _WARNED_UNSUPPORTED_BBOX = True
+            warnings.warn(
+                "CurvedText draws curved labels as vector glyph paths; text 'bbox' and "
+                "'backgroundcolor' are not supported and will be ignored.",
+                UserWarning,
+                stacklevel=2,
+            )
+
         self.axes = ax
         self.set_figure(ax.figure)
 
@@ -74,6 +95,7 @@ class CurvedText(Artist):
 
         self._text_kwargs = dict(text_kwargs)
         self._text_kwargs.pop("rotation", None)
+        self._text_kwargs.pop("rotation_mode", None)
         self._text_kwargs.pop("ha", None)
         self._text_kwargs.pop("horizontalalignment", None)
         self._text_kwargs.pop("va", None)
@@ -116,21 +138,45 @@ class CurvedText(Artist):
         lines = self._text.splitlines() or [""]
         for line in lines:
             chars = list(line)
-            artists: list[Text | None] = []
+            artists: list[PathPatch | None] = []
             for ch in chars:
                 if ch.isspace():
                     artists.append(None)
                     continue
-                artist = Text(0, 0, ch, **self._text_kwargs)
-                artist.set_parse_math(False)
-                artist.set_usetex(False)
-                artist.set_figure(self.figure)
-                artist.axes = self.axes
-                assert self.axes is not None
-                artist.set_transform(self.axes.transData)
-                artist.set_horizontalalignment("center")
-                artist.set_verticalalignment("center")
-                artists.append(artist)
+
+                fontsize_points = float(self._template.get_fontsize())
+                prop = self._template.get_fontproperties()
+                glyph_path = TextPath(
+                    (0, 0), ch, size=fontsize_points, prop=prop, usetex=False
+                )
+
+                bbox = glyph_path.get_extents()
+                x_center_pt = (bbox.x0 + bbox.x1) / 2.0
+
+                patch = PathPatch(
+                    glyph_path,
+                    facecolor=self._template.get_color(),
+                    edgecolor="none",
+                    linewidth=0,
+                    antialiased=self._template.get_antialiased(),
+                )
+                patch.set_alpha(self._template.get_alpha())
+                patch.set_path_effects(self._template.get_path_effects())
+                patch.set_zorder(self.get_zorder())
+                patch.set_figure(self.figure)
+                patch.axes = self.axes
+
+                # Preserve common Artist properties that users may set via text kwargs.
+                patch.set_clip_on(self._template.get_clip_on())
+                patch.set_clip_box(self._template.get_clip_box())
+                patch.set_clip_path(self._template.get_clip_path())
+                patch.set_url(self._template.get_url())
+
+                # Stash the glyph for tests/debugging.
+                patch._mplsoccer_char = ch  # type: ignore[attr-defined]
+                patch._mplsoccer_x_center_pt = float(x_center_pt)  # type: ignore[attr-defined]
+
+                artists.append(patch)
             self._lines.append(_LineGlyphs(text=line, chars=chars, artists=artists))
 
     def _direction_sign(self) -> int:
@@ -152,10 +198,16 @@ class CurvedText(Artist):
         if not line.chars:
             return
 
+        theta_ref = float(start_theta)
+
         center_x, center_y = self._center
         assert self.axes is not None
         center_px = self.axes.transData.transform((center_x, center_y))
-        edge_px = self.axes.transData.transform((center_x + radius_data, center_y))
+        edge_xy = (
+            center_x + radius_data * float(np.sin(theta_ref)),
+            center_y + radius_data * float(np.cos(theta_ref)),
+        )
+        edge_px = self.axes.transData.transform(edge_xy)
         radius_px = float(np.hypot(*(edge_px - center_px)))
         if not np.isfinite(radius_px) or radius_px <= 0:
             return
@@ -165,10 +217,13 @@ class CurvedText(Artist):
         # Use individual character widths instead of cumulative text widths.
         # Cumulative widths include kerning adjustments that don't apply when
         # each character is rendered individually, causing spacing mismatches.
-        advances_px = []
+        advances_pt = []
         for ch in line.text:
-            w, _, _ = renderer.get_text_width_height_descent(ch, prop, ismath=False)
-            advances_px.append(float(w))
+            w, _, _ = text_to_path.get_text_width_height_descent(ch, prop, ismath=False)
+            advances_pt.append(float(w))
+
+        pt_to_px = self.figure.dpi / 72.0
+        advances_px = [w * pt_to_px for w in advances_pt]
 
         letter_spacing_px = self._letter_spacing_points * self.figure.dpi / 72.0
         total_width_px = float(sum(advances_px))
@@ -195,8 +250,26 @@ class CurvedText(Artist):
                 rotation = -np.rad2deg(theta_i)
                 if direction_sign == -1:
                     rotation += 180
-                artist.set_position((x_i, y_i))
-                artist.set_rotation(rotation)
+
+                x_center_pt = getattr(artist, "_mplsoccer_x_center_pt", None)
+                if x_center_pt is None:
+                    bbox = artist.get_path().get_extents()
+                    x_center_pt = (bbox.x0 + bbox.x1) / 2.0
+                x_px, y_px = self.axes.transData.transform((x_i, y_i))
+
+                transform = (
+                    Affine2D()
+                    .translate(-x_center_pt, 0.0)
+                    .scale(pt_to_px)
+                    .rotate_deg(rotation)
+                    .translate(x_px, y_px)
+                )
+                artist.set_transform(transform)
+
+                # Stash the data-space anchor and rotation for tests/debugging.
+                artist._mplsoccer_position = (x_i, y_i)  # type: ignore[attr-defined]
+                artist._mplsoccer_rotation = float(rotation)  # type: ignore[attr-defined]
+
                 artist.draw(renderer)
 
             cumulative += adv_px
@@ -220,27 +293,32 @@ class CurvedText(Artist):
         )
         line_spacing_px = line_spacing_points * self.figure.dpi / 72.0
 
-        center_x, center_y = self._center
-        center_px = self.axes.transData.transform((center_x, center_y))
-        one_px = self.axes.transData.transform((center_x + 1.0, center_y))
-        px_per_data = float(np.hypot(*(one_px - center_px)))
-        line_spacing_data = (line_spacing_px / px_per_data) if px_per_data > 0 else 0.0
-
         num_lines = len(self._lines)
         center_x, center_y = self._center
         r0 = self._radius
         delta_r = max(1e-6, abs(r0) * 1e-3)
-        p0 = (
-            center_x + r0 * float(np.sin(self._theta)),
-            center_y + r0 * float(np.cos(self._theta)),
-        )
+        p0_vec = (float(np.sin(self._theta)), float(np.cos(self._theta)))
+        p0 = (center_x + r0 * p0_vec[0], center_y + r0 * p0_vec[1])
         p1 = (
-            center_x + (r0 + delta_r) * float(np.sin(self._theta)),
-            center_y + (r0 + delta_r) * float(np.cos(self._theta)),
+            center_x + (r0 + delta_r) * p0_vec[0],
+            center_y + (r0 + delta_r) * p0_vec[1],
         )
         p0_px = self.axes.transData.transform(p0)
         p1_px = self.axes.transData.transform(p1)
         outward_is_up = bool(p1_px[1] >= p0_px[1])
+
+        px_per_data_radial = float(np.hypot(*(p1_px - p0_px))) / float(delta_r)
+        if not np.isfinite(px_per_data_radial) or px_per_data_radial <= 0:
+            return
+
+        line_spacing_data = line_spacing_px / px_per_data_radial
+
+        prop = self._template.get_fontproperties()
+        _, lp_h, lp_d = text_to_path.get_text_width_height_descent(
+            "lp", prop, ismath=False
+        )
+        lp_h = float(lp_h)
+        lp_d = float(lp_d)
 
         for line_idx, line in enumerate(self._lines):
             if self._radii == "center":
@@ -259,11 +337,28 @@ class CurvedText(Artist):
                     # At the bottom half, increasing radius goes down in display coords, so
                     # place the first line innermost to preserve multiline ordering.
                     offset_factor = line_idx
-            radius_data = self._radius + offset_factor * line_spacing_data
+
+            radius_data_center = self._radius + offset_factor * line_spacing_data
+
+            # We draw individual glyphs as vector paths (TextPath -> PathPatch).
+            # Convert the caller-provided radius (treated as the visual centerline)
+            # to the baseline radius using the line's font metrics.
+            text_for_metrics = line.text if line.text else "lp"
+            _, h, d = text_to_path.get_text_width_height_descent(
+                text_for_metrics, prop, ismath=False
+            )
+            h = float(max(h, lp_h))
+            d = float(max(d, lp_d))
+            center_to_baseline_pt = (h / 2.0) - d
+            center_to_baseline_px = center_to_baseline_pt * (self.figure.dpi / 72.0)
+            center_to_baseline_data = center_to_baseline_px / px_per_data_radial
+            radius_data_baseline = (
+                radius_data_center - direction_sign * center_to_baseline_data
+            )
             self._layout_line(
                 renderer,
                 line=line,
-                radius_data=radius_data,
+                radius_data=radius_data_baseline,
                 start_theta=self._theta,
                 direction_sign=direction_sign,
             )
